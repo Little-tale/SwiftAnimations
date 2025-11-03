@@ -14,7 +14,7 @@ final class TestZoomViewController4: UIViewController, ZoomTransitionable {
     // ZoomTransitionable
     var zoomSourceView: UIView? { testButton }
 
-    private var testDelegate: UIViewControllerTransitioningDelegate?
+    private var testDelegate: CustomZoomTransition?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -28,8 +28,6 @@ final class TestZoomViewController4: UIViewController, ZoomTransitionable {
 
         view.addSubview(testButton)
         
-        testDelegate = CustomZoomTransition(referenceView: testButton)
-        
         testButton.snp.makeConstraints { make in
             make.top.equalTo(view.safeAreaLayoutGuide).offset(24)
             make.height.equalTo(56)
@@ -40,13 +38,26 @@ final class TestZoomViewController4: UIViewController, ZoomTransitionable {
             self?.presentNext()
         }, for: .touchUpInside)
     }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+    }
 
     private func presentNext() {
-        let vc = TestZoomNextViewController()
+        let vc = TestZoomNextViewController2()
+        vc.view.backgroundColor = .red
+        
+        testDelegate = CustomZoomTransition(referenceView: testButton) { [weak self] in
+            guard let self else { return }
+            testDelegate = nil
+        }
         vc.modalPresentationStyle = .custom
         vc.transitioningDelegate = self.testDelegate
-        vc.view.backgroundColor = .red
         self.present(vc, animated: true)
+        
+        // 만약 네비게이션 으로 진행하려면
+        self.navigationController?.delegate = self.testDelegate
+        self.navigationController?.pushViewController(vc, animated: true)
     }
 }
 

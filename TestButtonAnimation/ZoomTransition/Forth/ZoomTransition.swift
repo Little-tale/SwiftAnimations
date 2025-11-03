@@ -7,22 +7,27 @@
 
 import UIKit
 
-final class CustomZoomTransition: NSObject {
+final class CustomZoomTransition: NSObject, UINavigationControllerDelegate {
     private let config: CustomZoomTransitionConfiguration
-    private let referenceView: UIView
+    private weak var referenceView: UIView?
     private let presentingTransitionAnimator: CustomPresentingTransitionAnimator
     private let dismissalTransitionAnimator: CustomDismissalTransitionAnimator
     private var presentationController: UIPresentationController?
     private var currentTranslationY: CGFloat = 0
+    private var originalCenter: CGPoint = .zero
+    private var originalAnchor: CGPoint = .zero
+    private var ended: (() -> Void)
 
     // MARK: - Initializers
 
     init(
         referenceView: UIView,
-        config: CustomZoomTransitionConfiguration = CustomZoomTransitionConfiguration()
+        config: CustomZoomTransitionConfiguration = CustomZoomTransitionConfiguration(),
+        ended: @escaping () -> Void
     ) {
         self.referenceView = referenceView
         self.config = config
+        self.ended = ended
 
         presentingTransitionAnimator = CustomPresentingTransitionAnimator(
             config: config,
@@ -31,8 +36,23 @@ final class CustomZoomTransition: NSObject {
         
         dismissalTransitionAnimator = CustomDismissalTransitionAnimator(
             config: config,
-            referenceView: referenceView
+            referenceView: referenceView,
         )
+    }
+    
+    func navigationController(_ navigationController: UINavigationController, animationControllerFor operation: UINavigationController.Operation, from fromVC: UIViewController, to toVC: UIViewController) -> (any UIViewControllerAnimatedTransitioning)? {
+        switch operation {
+        case .push:
+            return presentingTransitionAnimator
+        case .pop:
+            return dismissalTransitionAnimator
+        default:
+            return nil
+        }
+    }
+    
+    deinit {
+        print("** DEAD \(Self.description())")
     }
 }
 
@@ -47,6 +67,7 @@ extension CustomZoomTransition: UIViewControllerTransitioningDelegate {
         source: UIViewController
     ) -> UIViewControllerAnimatedTransitioning? {
         print("\(#function)")
+        referenceView?.alpha = 0
         return presentingTransitionAnimator
     }
 
@@ -71,6 +92,10 @@ extension CustomZoomTransition: UIViewControllerTransitioningDelegate {
         using animator: UIViewControllerAnimatedTransitioning
     ) -> UIViewControllerInteractiveTransitioning? {
         print("\(#function)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + config.transitionDuration) { [weak self] in
+            self?.referenceView?.alpha = 1
+            self?.ended()
+        }
         return dismissalTransitionAnimator
     }
 
@@ -100,33 +125,107 @@ extension CustomZoomTransition: UIViewControllerTransitioningDelegate {
     // MARK: - 제스처 처리
     /// 프레젠트된 화면에서 팬 제스처를 감지해 이동/알파/디스미스를 제어
     @objc
-    private func handlePanGesture(_ gestureRecognizer: UIPanGestureRecognizer) {
-        guard let presentedVC = presentationController?.presentedViewController else {
+    private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
+        guard let presentedVC = presentationController?.presentedViewController,
+              let container = presentedVC.view.superview else {
             return
         }
 
-        switch gestureRecognizer.state {
-        case .changed:
-            let translation = gestureRecognizer.translation(in: presentedVC.view)
-            currentTranslationY = hypot(translation.x, translation.y)
-            presentedVC.view.alpha = config.getAlpha(by: translation)
-            presentedVC.view.transform = CGAffineTransform(translationX: translation.x, y: translation.y)
-            gestureRecognizer.setTranslation(translation, in: presentedVC.view)
-        case .ended, .cancelled:
-            presentedVC.view.alpha = 1
-            if currentTranslationY > config.panGestureDismissThreshold {
-                presentedVC.dismiss(animated: true, completion: nil)
-            }
-            else {
-                currentTranslationY = 0
+        guard let targetView = presentedVC.view else { return }
 
-                UIView.animate(withDuration: 0.1) {
-                    presentedVC.view.transform = .identity
-                }
+        switch gesture.state {
+        case .began:
+            targetView.layer.cornerRadius = 45
+            // 1) 기존 뷰의 중앙, 포인트를 저장
+            originalCenter = targetView.center
+            originalAnchor = targetView.layer.anchorPoint
+
+            // 2) 터치 지점을 뷰 좌표로
+            let touchInView = gesture.location(in: targetView)
+
+            // 3) anchorPoint로 바꿀 비율 (0~1)
+            let newAnchor = CGPoint(
+                x: touchInView.x / targetView.bounds.width,
+                y: touchInView.y / targetView.bounds.height
+            )
+            // 0.5, 0.5 (중심) --> 드래그 앵커
+            targetView.layer.anchorPoint = newAnchor
+            
+            // 4) anchorPoint를 바꾸면 position이 바뀌어버리니, 그만큼 보정
+            let oldPos = targetView.layer.position
+            print("began - oldPos: ", oldPos) // began - oldPos:  (220.0, 478.0)
+            print("began - originalAnchor", originalAnchor) // began - originalAnchor (0.5, 0.5)
+            print("began - newAnchor", newAnchor) // began - newAnchor (0.02727272727272727, 0.3158995815899582)
+            
+            let moveX = (newAnchor.x - originalAnchor.x) // 기준점x 0.47..만큼 왼쪽으로
+            let moveY = (newAnchor.y - originalAnchor.y) // 기준점y 0.19..만큼 위로
+            
+            // px 로 전환
+            let moveXPx = moveX * targetView.bounds.width
+            let moveYPx = moveY * targetView.bounds.height
+            
+            let newPos = CGPoint(
+                x: oldPos.x + moveXPx,
+                y: oldPos.y + moveYPx
+            )
+            
+            targetView.layer.position = newPos
+
+        case .changed:
+            let translation = gesture.translation(in: container)
+            let dx = translation.x
+            let dy = translation.y
+
+            // 전체 이동 거리 (피타고라스)
+            let distance = hypot(dx, dy)
+
+            // 얼마나 줄일지
+            let maxDrag: CGFloat = 300
+            let progress = min(distance / maxDrag, 1)
+
+            let minScale: CGFloat = 0.4
+            let scale = 1 - (1 - minScale) * progress
+
+            let scaleTransform = CGAffineTransform(scaleX: scale, y: scale)
+            let translateTransform = CGAffineTransform(translationX: dx, y: dy)
+            targetView.transform = scaleTransform.concatenating(translateTransform)
+
+            // 투명도도 전체 거리 기준
+            targetView.alpha = 1 - 0.4 * progress
+
+        case .ended, .cancelled:
+            // 원래대로
+            let shouldDismiss = targetView.transform.ty > 150
+            if shouldDismiss {
+                presentedVC.dismiss(animated: true)
+            } else {
+                UIView.animate(withDuration: 0.2, animations: { [weak self] in
+                    guard let weakSelf = self else { return }
+                    targetView.transform = .identity
+                    targetView.alpha = 1
+                    // anchorPoint도 원래대로
+                    targetView.layer.anchorPoint = weakSelf.originalAnchor
+                    targetView.center = weakSelf.originalCenter
+                    targetView.layer.cornerRadius = 0
+                })
             }
+
         default:
             break
         }
+    }
+    
+    // MARK: - 유틸리티
+    /// 팬 제스처의 이동량(양축)을 기반으로 알파 값을 계산합니다.
+    /// - 이동 거리 0일 때: 1.0
+    /// - 이동 거리가 `alphaRangeDistance` 이상일 때: `minAlphaDuringPan`
+    /// - 그 사이 구간은 선형으로 감소합니다.
+    func getAlpha(for translation: CGPoint) -> CGFloat {
+        let distance = hypot(translation.x, translation.y) // 루트(x^2 + y^2)
+        guard config.alphaRangeDistance > 0 else { return 1.0 }
+        let clamp = min(max(distance / config.alphaRangeDistance, 0), 1)
+        let alpha = 1.0 - clamp * (1.0 - config.minAlphaDuringPan)
+        return CGFloat(alpha)
     }
 }
 
@@ -160,6 +259,7 @@ extension CustomPresentingTransitionAnimator: UIViewControllerAnimatedTransition
         using transitionContext: UIViewControllerContextTransitioning
     ) {
         print("\(#function)")
+        // 이번에 나타나야 하는 뷰컨 받기
         guard let presentedViewController = transitionContext.viewController(forKey: .to) else {
             return
         }
@@ -282,12 +382,42 @@ extension CustomDismissalTransitionAnimator: UIViewControllerAnimatedTransitioni
         return config.transitionDuration
     }
 
-    /// 인터랙티브 디스미스를 사용하므로 이 메서드에서는 별도 애니메이션을 수행하지 않습니다.
-    func animateTransition(
-        using transitionContext: UIViewControllerContextTransitioning
-    ) {
-        print("\(#function)")
-        // InteractiveTransitioning을 사용하므로, 아무동작도 하지 않는다.
+    /// 인터랙티브 디스미스(모달방식)를 사용하므로 이 메서드에서는 별도 애니메이션을 수행하지 않습니다. 단, 네비게이션 방식에선 사용됩니다.
+    func animateTransition(using ctx: UIViewControllerContextTransitioning) {
+        // 네비 pop일 때 호출되는 곳
+        guard
+            let fromVC = ctx.viewController(forKey: .from),
+            let toVC   = ctx.viewController(forKey: .to)
+        else {
+            ctx.completeTransition(false)
+            return
+        }
+        
+        let container = ctx.containerView
+        // pop일 땐 toVC를 아래에 깔아야 함
+        container.insertSubview(toVC.view, belowSubview: fromVC.view)
+        
+        // referenceView의 최종 위치
+        let targetFrame = container.convert(referenceView.bounds, from: referenceView)
+        
+        let duration = transitionDuration(using: ctx)
+        
+        UIView.animate(withDuration: duration,
+                       delay: 0,
+                       options: [.curveEaseInOut],
+                       animations: { [weak self] in
+            guard let self else { return }
+            // fromVC.view를 버튼 위치만큼 줄이기
+            fromVC.view.frame = targetFrame
+            fromVC.view.layer.cornerRadius = self.referenceView.layer.cornerRadius
+        }, completion: { finished in
+            // 끝나면 pop 완료
+            let cancelled = ctx.transitionWasCancelled
+            if !cancelled {
+                fromVC.view.removeFromSuperview()
+            }
+            ctx.completeTransition(!cancelled)
+        })
     }
 
     /// 디스미스 애니메이션 종료 시 호출

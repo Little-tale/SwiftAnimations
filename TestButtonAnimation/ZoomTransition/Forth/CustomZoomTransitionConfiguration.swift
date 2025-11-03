@@ -42,21 +42,4 @@ struct CustomZoomTransitionConfiguration {
         self.minAlphaDuringPan = minAlphaDuringPan
         self.alphaRangeDistance = alphaRangeDistance
     }
-
-    // MARK: - 유틸리티
-    /// 팬 제스처의 이동량(양축)을 기반으로 알파 값을 계산합니다.
-    /// - 이동 거리 0일 때: 1.0
-    /// - 이동 거리가 `alphaRangeDistance` 이상일 때: `minAlphaDuringPan`
-    /// - 그 사이 구간은 선형으로 감소합니다.
-    func alpha(for translation: CGPoint) -> CGFloat {
-        let distance = hypot(translation.x, translation.y)
-        guard alphaRangeDistance > 0 else { return 1.0 }
-        let t = min(max(distance / alphaRangeDistance, 0), 1)
-        let alpha = 1.0 - t * (1.0 - minAlphaDuringPan)
-        return CGFloat(alpha)
-    }
-
-    func getAlpha(by translation: CGPoint) -> CGFloat {
-        return alpha(for: translation)
-    }
 }
