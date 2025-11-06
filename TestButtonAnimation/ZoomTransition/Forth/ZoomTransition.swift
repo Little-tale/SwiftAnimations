@@ -362,7 +362,6 @@ private extension CustomPresentingTransitionAnimator {
 final class CustomDismissalTransitionAnimator: NSObject {
     private let config: CustomZoomTransitionConfiguration
     private let referenceView: UIView
-    private var transitionContext: UIViewControllerContextTransitioning?
 
     // MARK: - 초기화
     init(config: CustomZoomTransitionConfiguration, referenceView: UIView) {
@@ -423,7 +422,6 @@ extension CustomDismissalTransitionAnimator: UIViewControllerAnimatedTransitioni
     /// 디스미스 애니메이션 종료 시 호출
     func animationEnded(_ transitionCompleted: Bool) {
         print("\(#function)")
-        transitionContext = nil
     }
 }
 
@@ -434,22 +432,20 @@ extension CustomDismissalTransitionAnimator: UIViewControllerInteractiveTransiti
     /// 제스처 진행도에 따라 축소/코너 라운드 변화가 적용되는 인터랙티브 디스미스를 시작
     func startInteractiveTransition(_ transitionContext: UIViewControllerContextTransitioning) {
         print("\(#function)")
-        guard let singleColorVC = transitionContext.viewController(forKey: .from) else {
+        guard let fromVC = transitionContext.viewController(forKey: .from) else {
             return
         }
-    
-        self.transitionContext = transitionContext
 
-        singleColorVC.view.isHidden = true
+        fromVC.view.isHidden = true
         
         let containerView = transitionContext.containerView
-        let startPoint = CGPoint(x: singleColorVC.view.frame.minX,
-                                 y: singleColorVC.view.frame.minY)
+        let startPoint = CGPoint(x: fromVC.view.frame.minX,
+                                 y: fromVC.view.frame.minY)
         
-        let startSize = singleColorVC.view.frame.size
+        let startSize = fromVC.view.frame.size
 
         let transitionView = UIView(frame: CGRect(origin: startPoint, size: startSize))
-        transitionView.backgroundColor = singleColorVC.view.backgroundColor
+        transitionView.backgroundColor = fromVC.view.backgroundColor
         transitionView.layer.masksToBounds = true
         transitionView.layer.cornerRadius = 0
         containerView.addSubview(transitionView)
